@@ -128,7 +128,6 @@ class NYUFingerDoubleRobot(PinBulletWrapper):
         self.end_effector_names = config.ee_names
         self.end_eff_ids = config.ee_ids
         self.joint_names = config.joint_names
-        self.ees_num = len(self.end_effector_names)
 
         # Creates the wrapper by calling the super.__init__.
         super().__init__(

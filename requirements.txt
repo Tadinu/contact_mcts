@@ -6,9 +6,10 @@ scipy
 jupyter
 cython
 matplotlib
-pybullet
+mujoco
 tqdm
 cvxpy
+casadi
 gurobipy
 meshcat
 networkx

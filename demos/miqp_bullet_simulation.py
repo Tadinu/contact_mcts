@@ -76,9 +76,9 @@ box_orn = pin.SE3ToXYZQUAT(params.pose_start)[3:]
 env = FingerDoubleAndBox(params, box_pos, box_orn, ee_pos, pybullet.GUI)
 
 controller0 = ImpedanceController(np.diag([180] * 3), np.diag([5.] * 3),
-                                  env.finger0.pin_robot, env.ee0_id)
+                                  env.art0.pin_robot, env.ee0_id)
 controller1 = ImpedanceController(np.diag([180] * 3), np.diag([5.] * 3),
-                                  env.finger1.pin_robot, env.ee1_id)
+                                  env.art1.pin_robot, env.ee1_id)
 
 for i in range(1, len(params.desired_poses)):
     pose = params.desired_poses[i]
@@ -88,16 +88,16 @@ ee0_des, ee1_des = trajs[0][0][0], trajs[0][1][0]
 # Run the simulator for 2000 steps to move to the initial position
 for i in range(2000):
     # update kinematic
-    q0, dq0 = env.finger0.get_state_update_pinocchio()
-    q1, dq1 = env.finger1.get_state_update_pinocchio()
+    q0, dq0 = env.art0.get_state_update_pinocchio()
+    q1, dq1 = env.art1.get_state_update_pinocchio()
 
     # calculate torque
     tau0 = controller0.compute_torque(q0, dq0, ee0_des, np.zeros(3), np.zeros(3))
     tau1 = controller1.compute_torque(q1, dq1, ee1_des, np.zeros(3), np.zeros(3))
 
     # send torque
-    env.finger0.send_joint_command(tau0)
-    env.finger1.send_joint_command(tau1)
+    env.art0.send_joint_command(tau0)
+    env.art1.send_joint_command(tau1)
 
     # Step the simulator.
     env.step()
@@ -118,16 +118,16 @@ for i in range(len(sol.contact_modes)):
         f1_des = force1[n1]
 
         # update kinematic
-        q0, dq0 = env.finger0.get_state_update_pinocchio()
-        q1, dq1 = env.finger1.get_state_update_pinocchio()
+        q0, dq0 = env.art0.get_state_update_pinocchio()
+        q1, dq1 = env.art1.get_state_update_pinocchio()
 
         # calculate torque
         tau0 = controller0.compute_torque(q0, dq0, ee0_des, np.zeros(3), f0_des)
         tau1 = controller1.compute_torque(q1, dq1, ee1_des, np.zeros(3), f1_des)
 
         # send torque
-        env.finger0.send_joint_command(tau0)
-        env.finger1.send_joint_command(tau1)
+        env.art0.send_joint_command(tau0)
+        env.art1.send_joint_command(tau1)
 
         # Step the simulator.
         env.step(1)

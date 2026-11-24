@@ -19,6 +19,7 @@ from cto.envs.fingers import FingerDoubleAndBox
 from cto.trajectory import generate_ee_motion
 from cto.mcts.pvmcts import PolicyValueMCTS
 from cto.params import get_default_params, update_params
+from cto.kinematics import _xyzw_to_wxyz
 from robot_properties_nyu_finger.config import NYUFingerDoubleConfig0, NYUFingerDoubleConfig1
 
 # ## Set up and solve the problem
@@ -70,10 +71,11 @@ params = update_params(params, desired_poses)
 # params = update_params(params, desired_poses)
 
 
-pose_init = pin.SE3ToXYZQUAT(params.desired_poses[0])
-box_pos = pose_init[:3]
-box_orn = pose_init[3:]
-env = FingerDoubleAndBox(params, box_pos, box_orn)
+box_pose = pin.SE3ToXYZQUAT(params.desired_poses[0])
+box_pos = box_pose[:3]
+box_quat = _xyzw_to_wxyz(box_pose[3:])
+box_pose = np.concat([box_pos, box_quat])
+env = FingerDoubleAndBox(params, box_pose)
 
 max_budget = 200
 mcts = PolicyValueMCTS(params, env)
@@ -93,18 +95,13 @@ dt_sim = 1e-3
 rest_locations, trajs, forces = generate_ee_motion(state, sol, dt_sim, dt_plan, params)
 
 # ## Simulate
-
-
 ee_pos = [trajs[0][0][0], trajs[0][1][0]]
-box_pos = pin.SE3ToXYZQUAT(params.pose_start)[:3]
-box_orn = pin.SE3ToXYZQUAT(params.pose_start)[3:]
-
-env = FingerDoubleAndBox(params, box_pos, box_orn, ee_pos, render=True)
+env = FingerDoubleAndBox(params, box_pose, ee_pos, render=True)
 
 controller0 = ImpedanceController(np.diag([100] * 3), np.diag([5.] * 3),
-                                  env.finger0.pin_robot, env.ee0_id)
+                                  env.art0.pin_robot, env.art0.main_ee_id)
 controller1 = ImpedanceController(np.diag([100] * 3), np.diag([5.] * 3),
-                                  env.finger1.pin_robot, env.ee1_id)
+                                  env.art1.pin_robot, env.art1.main_ee_id)
 
 for i in range(1, len(params.desired_poses)):
     pose = params.desired_poses[i]
@@ -114,27 +111,33 @@ ee0_des, ee1_des = trajs[0][0][0], trajs[0][1][0]
 # Run the simulator for 2000 steps to move to the initial position
 for i in range(2000):
     # update kinematic
-    q0, dq0 = env.finger0.get_state_update_pinocchio()
-    q1, dq1 = env.finger1.get_state_update_pinocchio()
+    q0, dq0 = env.art0.get_state_update_pinocchio()
+    q1, dq1 = env.art1.get_state_update_pinocchio()
 
     # calculate torque
     tau0 = controller0.compute_torque(q0, dq0, ee0_des, np.zeros(3), np.zeros(3))
     tau1 = controller1.compute_torque(q1, dq1, ee1_des, np.zeros(3), np.zeros(3))
 
     # send torque
-    env.finger0.send_joint_command(tau0)
-    env.finger1.send_joint_command(tau1)
+    env.art0.send_joint_command(tau0)
+    env.art1.send_joint_command(tau1)
 
     # Step the simulator.
     env.step()
 
-d = params.contact_duration
+face_mats = env.box_face_materials
+# T = params.contact_duration
 for i in range(len(state)):
     traj0, traj1 = trajs[i]
     force0, force1 = forces[i]
     N0 = len(traj0)
     N1 = len(traj1)
     for n in range(np.max((N0, N1))):
+        face0_id, face1_id = np.array(state[i]) % len(face_mats)
+        face0_geom = env.model.geom(env.box_face_names[face0_id])
+        face1_geom = env.model.geom(env.box_face_names[face1_id])
+        face0_geom.matid = face_mats[face0_id]
+        face1_geom.matid = face_mats[face1_id]
         n0 = n if n < N0 else -1
         n1 = n if n < N1 else -1
         ee0_des = traj0[n0]
@@ -144,21 +147,23 @@ for i in range(len(state)):
         f1_des = force1[n1]
 
         # update kinematic
-        q0, dq0 = env.finger0.get_state_update_pinocchio()
-        q1, dq1 = env.finger1.get_state_update_pinocchio()
+        q0, dq0 = env.art0.get_state_update_pinocchio()
+        q1, dq1 = env.art1.get_state_update_pinocchio()
 
         # calculate torque
         tau0 = controller0.compute_torque(q0, dq0, ee0_des, np.zeros(3), f0_des)
         tau1 = controller1.compute_torque(q1, dq1, ee1_des, np.zeros(3), f1_des)
 
         # send torque
-        env.finger0.send_joint_command(tau0)
-        env.finger1.send_joint_command(tau1)
+        env.art0.send_joint_command(tau0)
+        env.art1.send_joint_command(tau1)
 
         # Step the simulator.
         env.step(1)
+    # face0_geom.matid = face1_geom.matid = env.mat_core
+    # env.step(1)
 
-final_pose = env.get_box_pose()
+final_pose = env.get_box_pose_se3()
 print("final box position:", final_pose.translation, " target:", params.pose_end.translation)
 print("final box rotation error [rad]:", np.linalg.norm(pin.log3(final_pose.rotation.T @ params.pose_end.rotation)))
 env.close()

@@ -52,10 +52,6 @@ class EnvironmentContact(object):
                                location=self.location, f_local=f_local)
 
 
-def environment_contact(location, orientation, params, type="sticking", sliding_direction=None):
-    return EnvironmentContact(location, orientation, params, type, sliding_direction)
-
-
 class FixedForceContact(object):
     """Force is a parameter; location is a decision variable on the contact surface.
 
@@ -111,18 +107,18 @@ class FixedLocationContact(object):
         self.location = np.zeros(3)
         self.surface = 0
         self.r = opti.parameter(3)
-        self.orn = opti.parameter(3, 3)  # contact->body rotation; zeros when surface == 0
+        self.rot = opti.parameter(3, 3)  # contact->body rotation; zeros when surface == 0
         self.in_contact = opti.parameter()
 
-        # f_local is the force in the contact frame; the original uses f_local = orn^T force,
-        # i.e. force = orn f_local. With orn = 0 the force is exactly 0 (replaces force == in_contact*aux).
+        # f_local is the force in the contact frame; the original uses f_local = rot^T force,
+        # i.e. force = rot f_local. With rot = 0 the force is exactly 0 (replaces force == in_contact*aux).
         self.f_local = opti.variable(3)
-        self.force = self.orn @ self.f_local
+        self.force = self.rot @ self.f_local
         self.torque = ca.cross(self.r, self.force)  # = skew(r) @ force
 
         # bounded force (body frame, elementwise)
         opti.subject_to(opti.bounded(-params.max_force, self.force, params.max_force))
-        # fc must be bounded for ALL contacts: when a contact is off (orn = 0) the box above
+        # fc must be bounded for ALL contacts: when a contact is off (rot = 0) the box above
         # does not touch fc at all, leaving a flat, unbounded direction inside the cone.
         # |force_i| <= M for a rotated force implies |fc_i| <= sqrt(3) M, so this is no restriction.
         fc_max = np.sqrt(3.0) * np.asarray(params.max_force, dtype=float)
@@ -145,13 +141,7 @@ class FixedLocationContact(object):
         opti.set_value(self.r, self.location)
         if surface == 0:
             opti.set_value(self.in_contact, 0.0)
-            opti.set_value(self.orn, np.zeros((3, 3)))
+            opti.set_value(self.rot, np.zeros((3, 3)))
         else:
             opti.set_value(self.in_contact, 1.0)
-            opti.set_value(self.orn, params.contact_frame_orientation[surface - 1])
-
-
-def skew_symetrify(a):
-    # kept for compatibility; CasADi code uses ca.cross directly
-    a1, a2, a3 = a
-    return np.array([[0, -a3, a2], [a3, 0, -a1], [-a2, a1, 0]])
+            opti.set_value(self.rot, params.contact_frame_orientation[surface - 1])

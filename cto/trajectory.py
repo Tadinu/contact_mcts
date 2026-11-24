@@ -2,10 +2,12 @@ import pinocchio as pin
 import numpy as np
 from dotmap import DotMap
 
+
 def location_to_world(location, pose_ref):
     p = pose_ref.translation
     R = pose_ref.rotation
     return p + R @ location
+
 
 def location_traj_to_world(traj, traj_ref):
     traj_world = np.zeros_like(traj)
@@ -14,12 +16,14 @@ def location_traj_to_world(traj, traj_ref):
         traj_world[n] = location_to_world(traj[n], pose_ref)
     return traj_world
 
+
 def cart2sph(x, y, z):
     hxy = np.hypot(x, y)
     r = np.hypot(hxy, z)
     el = np.arctan2(z, hxy)
     az = np.arctan2(y, x)
     return r, az, el
+
 
 def sph2cart(r, az, el):
     rcos_theta = r * np.cos(el)
@@ -28,23 +32,25 @@ def sph2cart(r, az, el):
     z = r * np.sin(el)
     return x, y, z
 
+
 def interpolate_rigid_motion(diff, duration, t):
     # first we compute the coefficients
-    a5 = 6/(duration ** 5)
-    a4 = -15/(duration ** 4)
-    a3 = 10/(duration ** 3)
-    
+    a5 = 6 / (duration ** 5)
+    a4 = -15 / (duration ** 4)
+    a3 = 10 / (duration ** 3)
+
     # now we compute s and ds/dt
-    s = a3 * t**3 + a4 * t**4 + a5 * t**5
-    ds = 3 * a3 * t**2 + 4 * a4 * t**3 + 5 * a5 * t**4
-    dds = 6 * a3 * t + 12 * a4 * t**2 + 20 * a5 * t**3
-    
+    s = a3 * t ** 3 + a4 * t ** 4 + a5 * t ** 5
+    ds = 3 * a3 * t ** 2 + 4 * a4 * t ** 3 + 5 * a5 * t ** 4
+    dds = 6 * a3 * t + 12 * a4 * t ** 2 + 20 * a5 * t ** 3
+
     # now we compute q and dq/dt
     q = pin.exp6(s * diff)
     dq = diff * ds
     ddq = diff * dds
-    
+
     return q, dq, ddq
+
 
 def interpolate_trajectory_sphere(loc_start, loc_end, horizon, dt, pose_only=True):
     loc_start_sph = np.array(cart2sph(*loc_start))
@@ -66,7 +72,7 @@ def interpolate_trajectory_sphere(loc_start, loc_end, horizon, dt, pose_only=Tru
     ddq = np.gradient(dq, axis=0) / dt
 
     if pose_only:
-        return q  
+        return q
 
     traj_cart = DotMap()
     traj_cart.q = q
@@ -83,22 +89,23 @@ def interpolate_trajectory_line(loc_start, loc_end, horizon, dt, pose_only=True)
     q = np.zeros((horizon + 1, 3))
     dq = np.zeros((horizon + 1, 3))
     ddq = np.zeros((horizon + 1, 3))
-    
+
     for n in range(horizon + 1):
-        qn, dqn, ddqn = interpolate_rigid_motion(pose_diff, 
-                                                 horizon * dt, 
+        qn, dqn, ddqn = interpolate_rigid_motion(pose_diff,
+                                                 horizon * dt,
                                                  n * dt)
         q[n] = pin.SE3ToXYZQUAT(pose_start.act(qn))[:3]
         dq[n] = dqn.vector[:3]
         ddq[n] = ddqn.vector[:3]
 
     if pose_only:
-        return q      
+        return q
 
     traj = DotMap()
     traj.q, traj.dq, traj.ddq = q, dq, ddq
 
     return traj
+
 
 def combine_traj(traj1, traj2, pose_only=True):
     if pose_only:
@@ -109,19 +116,20 @@ def combine_traj(traj1, traj2, pose_only=True):
     traj_combined.ddq = np.vstack((traj1.ddq, traj2.ddq))
     return traj_combined
 
-def interpolate_trajectory(pose_start, pose_end, horizon, dt, pose_only=True): 
+
+def interpolate_trajectory(pose_start, pose_end, horizon, dt, pose_only=True):
     pose_diff = pin.log6(pose_start.actInv(pose_end))
     q = np.zeros((horizon + 1, 7))
     dq = np.zeros((horizon + 1, 6))
     ddq = np.zeros((horizon + 1, 6))
-    
+
     for n in range(horizon + 1):
-        qn, dqn, ddqn = interpolate_rigid_motion(pose_diff, 
-                                                 horizon * dt, 
+        qn, dqn, ddqn = interpolate_rigid_motion(pose_diff,
+                                                 horizon * dt,
                                                  n * dt)
         q[n] = pin.SE3ToXYZQUAT(pose_start.act(qn))
         dq[n] = dqn.vector
-        ddq[n] = ddqn.vector        
+        ddq[n] = ddqn.vector
 
     if pose_only:
         return q
@@ -138,24 +146,23 @@ def generate_trajectories(params, dt_ratio=1, pose_only=False):
     d_segment = d_static + d_dynamic
 
     horizon = (len(params.desired_poses) - 1) * d_segment
-    
+
     q = np.zeros((horizon, 7))
     dq = np.zeros((horizon, 6))
     ddq = np.zeros((horizon, 6))
 
-
     for i in range(len(params.desired_poses) - 1):
         pose_start, pose_end = params.desired_poses[i], params.desired_poses[i + 1]
-        
-        q[i*d_segment:i*d_segment+d_static, :] = pin.SE3ToXYZQUAT(pose_start)
 
-        traj = interpolate_trajectory(pose_start, pose_end, 
+        q[i * d_segment:i * d_segment + d_static, :] = pin.SE3ToXYZQUAT(pose_start)
+
+        traj = interpolate_trajectory(pose_start, pose_end,
                                       d_dynamic - 1, params.dt / dt_ratio,
                                       pose_only=False)
 
-        q[i*d_segment+d_static:(i+1)*d_segment, :] = traj.q
-        dq[i*d_segment+d_static:(i+1)*d_segment, :] = traj.dq
-        ddq[i*d_segment+d_static:(i+1)*d_segment, :] = traj.ddq
+        q[i * d_segment + d_static:(i + 1) * d_segment, :] = traj.q
+        dq[i * d_segment + d_static:(i + 1) * d_segment, :] = traj.dq
+        ddq[i * d_segment + d_static:(i + 1) * d_segment, :] = traj.ddq
 
     if pose_only:
         return q
@@ -170,6 +177,7 @@ def generate_trajectories(params, dt_ratio=1, pose_only=False):
 
     return traj
 
+
 def get_wrench(traj, params):
     '''
     get wrench in the body frame, excluding gravity
@@ -177,17 +185,23 @@ def get_wrench(traj, params):
     force = np.zeros((traj.horizon, 3))
     torque = np.zeros((traj.horizon, 3))
 
+    # 6D inverse dynamics (net external forces and torques) in the body-fixed frame of a single rigid body
     for n in range(traj.horizon):
-        curr_pose = pin.XYZQUATToSE3(traj.q[n])
-        gravity_body = curr_pose.rotation.T @ (params.mass * params.gravity)
-        force[n] = params.mass * (traj.ddq[n, :3] + np.cross(traj.dq[n, 3:], traj.dq[n, :3])) - gravity_body
-        torque[n] = params.inertia @ traj.ddq[n, 3:] + np.cross(traj.dq[n, 3:], params.inertia @ traj.dq[n, 3:])
-    
+        cur_pose = pin.XYZQUATToSE3(traj.q[n])
+        gravity_body = cur_pose.rotation.T @ (params.mass * params.gravity)
+        dq_lin = traj.dq[n, :3]
+        dq_ang = traj.dq[n, 3:]
+
+        ddq_lin = traj.ddq[n, :3]
+        ddq_ang = traj.ddq[n, 3:]
+
+        force[n] = params.mass * (ddq_lin + np.cross(dq_ang, dq_lin)) - gravity_body
+        torque[n] = params.inertia @ ddq_ang + np.cross(dq_ang, params.inertia @ dq_ang)
+
     return force, torque
 
 
 def get_environment_contacts(traj, params):
-
     '''
     Define environment contacts
     s: world frame 
@@ -198,37 +212,37 @@ def get_environment_contacts(traj, params):
 
     Rsc = np.eye(3)
     if params.MIQP:
-        from cto.miqp.contacts import environment_contact
+        from cto.miqp.contacts import EnvironmentContact
     else:
-        from cto.mcts.contacts import environment_contact
-    
+        from cto.mcts.contacts import EnvironmentContact
 
     environment_contacts = [None] * traj.horizon
     environment_contacts_locations = [np.array([0.05, -0.05, -0.05]),
-                                      np.array([0.05,  0.05, -0.05]),
-                                      np.array([-0.05,  -0.05, -0.05]),
-                                      np.array([-0.05,  0.05, -0.05])]
+                                      np.array([0.05, 0.05, -0.05]),
+                                      np.array([-0.05, -0.05, -0.05]),
+                                      np.array([-0.05, 0.05, -0.05])]
 
     for n in range(traj.horizon):
         curr_pose = pin.XYZQUATToSE3(traj.q[n])
         Rsb = curr_pose.rotation
         psb = curr_pose.translation
         Rbc = Rsb.T @ Rsc
-        curr_environment_contacts = []
+        curr_environment_contacts: list[EnvironmentContact] = []
         w_body = traj.dq[n][3:]
         for loc in environment_contacts_locations:
             loc_world = Rsb @ loc + psb
-            if abs(loc_world[-1] - params.ground_height) <= 1e-3: # check if the contact location is touching the table surface
+            if abs(loc_world[
+                       -1] - params.ground_height) <= 1e-3:  # check if the contact location is touching the table surface
                 v_body = np.cross(w_body, loc) + traj.dq[n][:3]
                 v_contact = (Rbc.T @ v_body)[:2]
                 if np.allclose(v_contact, 0):
-                    curr_environment_contacts.append(environment_contact(loc, Rbc, params,
+                    curr_environment_contacts.append(EnvironmentContact(loc, Rbc, params,
                                                                         type='sticking'))
                 else:
-                    curr_environment_contacts.append(environment_contact(loc, Rbc, params, 
-                                                                         type='sliding',
-                                                                         sliding_direction=v_contact))
-                
+                    curr_environment_contacts.append(EnvironmentContact(loc, Rbc, params,
+                                                                        type='sliding',
+                                                                        sliding_direction=v_contact))
+
         environment_contacts[n] = curr_environment_contacts
     return environment_contacts
 
@@ -261,7 +275,6 @@ def get_end_effector_regions(traj, params):
     b1_world = np.zeros(3)
     b1_world[0] = 0.1
 
-
     # finger 2
     A2_world = np.zeros((3, 3))
     A2_world[0, 0] = -1
@@ -274,8 +287,8 @@ def get_end_effector_regions(traj, params):
         curr_pose = pin.XYZQUATToSE3(traj.q[n])
         R = curr_pose.rotation
         p = curr_pose.translation
-        Ar1 =  A1_world @ R
-        Ar2 =  A2_world @ R
+        Ar1 = A1_world @ R
+        Ar2 = A2_world @ R
         br1 = b1_world - A1_world @ p
         br2 = b2_world - A2_world @ p
         end_effector_region.Ar = [Ar1, Ar2]
@@ -283,11 +296,11 @@ def get_end_effector_regions(traj, params):
         end_effector_regions.append(end_effector_region)
 
     return end_effector_regions
-        
+
+
 def integrate_trajectory(pose_start, idx_start, idx_end,
                          force, torque,
-                         params): 
-
+                         params):
     traj_length = idx_end - idx_start
     q = np.zeros((traj_length, 7))
     dq = np.zeros((traj_length, 6))
@@ -308,7 +321,7 @@ def integrate_trajectory(pose_start, idx_start, idx_end,
         next_pose = curr_pose.act(pin.exp6(dq[n + 1] * params.dt))
         poses.append(next_pose)
         q[n + 1] = pin.SE3ToXYZQUAT(next_pose)
-    
+
     traj = DotMap()
     traj.poses = poses
     traj.q, traj.dq, traj.ddq = q, dq, ddq
@@ -316,7 +329,8 @@ def integrate_trajectory(pose_start, idx_start, idx_end,
 
     return traj
 
-def generate_random_poses(n_desired_poses, 
+
+def generate_random_poses(n_desired_poses,
                           lb, ub, diff_lb, diff_ub,
                           init_lb=None, init_ub=None):
     if init_lb is None:
@@ -330,11 +344,12 @@ def generate_random_poses(n_desired_poses,
         while True:
             diff = np.random.uniform(diff_lb, diff_ub)
             pose = desired_poses[-1] + diff
-            if all(pose >= lb) and all(pose <= ub): 
+            if all(pose >= lb) and all(pose <= ub):
                 break
         desired_poses.append(pose)
 
     return desired_poses
+
 
 # hard-coded motion generator for the NYU double figner and a 10x10x10 cm Cube
 # TODO: replace this with a proper RRT planner
@@ -342,13 +357,13 @@ def generate_ee_motion(state, sol, dt_sim, dt_plan, params):
     def get_simplices(surface, r=0.12):
         # hard-coded surface vertices for a cube
         corners = np.array([[-r, -r],
-                            [ r, -r],
-                            [-r,  r],
-                            [ r,  r]])
+                            [r, -r],
+                            [-r, r],
+                            [r, r]])
         simplices = []
         for i in range(3):
             simplices.append(np.insert(corners, i, -r, axis=1))
-            simplices.append(np.insert(corners, i,  r, axis=1))
+            simplices.append(np.insert(corners, i, r, axis=1))
         return simplices[surface]
 
     dt_ratio = int(dt_plan / dt_sim)
@@ -388,15 +403,15 @@ def generate_ee_motion(state, sol, dt_sim, dt_plan, params):
                     # in contact no switch, follow the planned location traj
                     switch[i][c] = 1
                     loc = sol.locations[i * d][c]
-                    forces[i][c] = forces_r[c][h*i:h*(i+1)]
-                    
+                    forces[i][c] = forces_r[c][h * i:h * (i + 1)]
+
                 way_points[i][c] += [loc, loc]
-                traj_body = interpolate_trajectory_line(loc, loc, 
+                traj_body = interpolate_trajectory_line(loc, loc,
                                                         d * dt_ratio - 1, dt_sim)
-                
+
                 # convert to world frame & save traj/force
-                traj_ref = box_traj[h*i:h*(i+1)]
-                trajs[i][c] = location_traj_to_world(traj_body, traj_ref)            
+                traj_ref = box_traj[h * i:h * (i + 1)]
+                trajs[i][c] = location_traj_to_world(traj_body, traj_ref)
 
             if state[i][c] != state[next_id][c]:
                 if state[next_id][c] != 0:
@@ -407,7 +422,7 @@ def generate_ee_motion(state, sol, dt_sim, dt_plan, params):
                     loc1 = rest_locations[i][c]
                     loc2 = np.mean(get_simplices(next_surface - 1), axis=0)
                     loc3 = sol.locations[next_id * d][c]
-                    traj1_ref = traj2_ref = box_traj[h*i:h*(i+1)]
+                    traj1_ref = traj2_ref = box_traj[h * i:h * (i + 1)]
                     traj1_body = interpolate_trajectory_sphere(loc1, loc2, d * dt_ratio - 1, dt_sim)
                     forces[i][c] = np.zeros((2 * h, 3))
                 else:
@@ -419,23 +434,22 @@ def generate_ee_motion(state, sol, dt_sim, dt_plan, params):
                     loc3 = np.mean(get_simplices(curr_surface - 1), axis=0)
 
                     traj1_body = interpolate_trajectory_line(loc1, loc2, d * dt_ratio - 1, dt_sim)
-                    traj1_ref = box_traj[h*i:h*(i+1)]
+                    traj1_ref = box_traj[h * i:h * (i + 1)]
                     ref_end = pin.XYZQUATToSE3(traj1_ref[-1])
                     traj2_ref = interpolate_trajectory(ref_end, ref_end, d * dt_ratio - 1, dt_sim)
-                    forces[i][c] = np.vstack((forces_r[c][h*i:h*(i+1)], 
-                                            np.zeros((h, 3))))
-                    
-                
+                    forces[i][c] = np.vstack((forces_r[c][h * i:h * (i + 1)],
+                                              np.zeros((h, 3))))
+
                 way_points[i][c] += [loc1, loc2, loc3]
                 traj2_body = interpolate_trajectory_line(loc2, loc3, d * dt_ratio - 1, dt_sim)
-                
+
                 # convert to world frame
                 traj1_world = location_traj_to_world(traj1_body, traj1_ref)
                 traj2_world = location_traj_to_world(traj2_body, traj2_ref)
-                
+
                 # save traj/force
                 trajs[i][c] = combine_traj(traj1_world, traj2_world)
-                
+
             rest_locations[next_id][c] = way_points[i][c][-1]
 
     return rest_locations, trajs, forces

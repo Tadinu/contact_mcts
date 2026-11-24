@@ -23,8 +23,10 @@ import pinocchio as pin
 from torch.utils.data import Dataset
 from scipy.special import softmax
 
+from dotmap import DotMap
+
 from cto.mcts.problems import BiconvexProblem, integrate_solution
-from cto.heuristics import kinematic_feasibility, contact_removed, no_contact
+from cto.heuristics import kinematic_feasibility, contact_removed, no_contact, full_contact
 from cto.contact_modes import *
 from cto.mcts.pvnet import PolicyValueNet, ValueClassifier
 
@@ -82,7 +84,7 @@ class PolicyValuePredictor:
 
 class PolicyValueMCTS(object):
 
-    def __init__(self, params, env,
+    def __init__(self, params: DotMap, env,
                  uct_coeff=0.5, softmax_coeff=0.1,
                  networks: Optional[list["nn.Module"]] = None):
         self.params = params
@@ -134,6 +136,11 @@ class PolicyValueMCTS(object):
         else:
             return False
 
+    def is_dynamic_mode(self, mode_idx):
+        """Mode `mode_idx` belongs to the dynamic phase of its segment (each segment starts with
+        n_modes_static static modes followed by n_modes_dynamic dynamic ones)."""
+        return (mode_idx % self.params.n_modes_segment) >= self.params.n_modes_static
+
     def legal_actions_at(self, state: list[list[int]]):
         state_key = np.asarray(state).tobytes()
         if state_key in self.legal_actions.keys():
@@ -150,8 +157,13 @@ class PolicyValueMCTS(object):
 
         d = self.params.contact_duration
         feasible_transitions = find_feasible_transitions(curr_mode, self.params)
+        # optional: during the dynamic phase of a segment, require every manipulator to be in contact
+        # (otherwise a one-arm push that already reduces the pose error is accepted as a solution)
+        require_full = self.params.require_full_contact
         for next_mode in feasible_transitions:
             n = len(state) * d
+            if require_full and self.is_dynamic_mode(len(state)) and not full_contact(next_mode):
+                continue
             if kinematic_feasibility(next_mode, n, d, self.params, self.env):
                 if contact_removed(curr_mode, next_mode):
                     # only allow removing contact for zero acc.
@@ -213,6 +225,7 @@ class PolicyValueMCTS(object):
             best_node = max(self.reached_nodes_reward, key=self.reached_nodes_reward.get)
             sol = self.reached_nodes_sol[best_node]
             state = self.reached_nodes_state[best_node]
+            print('Solved', state)
             return state, sol
         else:
             return None, None
@@ -254,7 +267,7 @@ class PolicyValueMCTS(object):
 
             next_state = self.apply_action_to(state, action)
             v = self.simulate(next_state)
-            N, Q, _ = self.get_state_info(state)
+            N, Q, _ = self.get_state_nodes(state)
 
             Qsa = Q[tuple(action)]
             Nsa = N[tuple(action)]
@@ -288,7 +301,7 @@ class PolicyValueMCTS(object):
         _, v = self.predictor.predict(self.get_state_goal(state), state)
         return v
 
-    def get_state_info(self, state: list[list[int]]):
+    def get_state_nodes(self, state: list[list[int]]):
         state_key = np.asarray(state).tobytes()
         node = self.search_tree.nodes[state_key]
         return node['N'], node['Q'], node['P']
@@ -314,7 +327,7 @@ class PolicyValueMCTS(object):
 
         for state_key in self.search_tree.nodes():
             state = self.search_tree.nodes[state_key]['state']
-            N, Q, P = self.get_state_info(state)
+            N, Q, P = self.get_state_nodes(state)
             goal = self.get_state_goal(state)
 
             action_prob = np.zeros(len(self.action_ids))
@@ -338,7 +351,7 @@ class PolicyValueMCTS(object):
 
     def uct(self, state, action, eps=1e-6):
 
-        N, Q, P = self.get_state_info(state)
+        N, Q, P = self.get_state_nodes(state)
         Nsa = N[tuple(action)]
         Nsum = sum(N.values())
         exploitation_score = Q[tuple(action)]
@@ -419,7 +432,7 @@ class PolicyValueMCTS(object):
             self.reached_nodes_reward[state_key] = reward
             self.reached_nodes_error[state_key] = (100 * np.sum(all_pos_err), 180 / np.pi * np.sum(all_orn_err))
             if self.verbose:
-                print('found a solution with reward:', reward)
+                print('found a solution with reward:', reward, 'State:', state)
         return reward
 
 

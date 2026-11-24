@@ -3,6 +3,7 @@ import numpy as np
 import pinocchio as pin
 from cto.objects import Cube
 from cto.trajectory import generate_trajectories
+from cto.mcts.problems import DEFAULT_SOLVER
 import gurobipy as gp
 
 
@@ -20,6 +21,7 @@ def get_default_params(object_urdf, robot_config, MIQP=False):
             params.M = 100
 
     # MCTS
+    params.qp_solver = DEFAULT_SOLVER
     params.err_threshold = 0.03
     params.classifier_threshold = 0.5
 
@@ -45,14 +47,16 @@ def get_default_params(object_urdf, robot_config, MIQP=False):
     # contact
     params.n_contacts = 2
     params.contact_duration = 3
+    # Only for experiment since normally the solver already outputs the optimal way for multi-arms's contact plan!
+    params.require_full_contact = False
 
     # friction
     params.friction_coeff = 0.8
-    params.friction_coeff_plan = 0.5  # 0.4
+    params.friction_coeff_plan = 0.45  # 0.4
 
     # bounds
     params.max_location = 0.05
-    params.max_force = 10
+    params.max_force = 20
 
     # robot
     params.robot_config = robot_config

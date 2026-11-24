@@ -22,12 +22,10 @@ from cto.trajectory import integrate_trajectory
 # Solver helper
 # --------------------------------------------------------------------------- #
 # All sub-problems are convex QPs (friction pyramid, linear constraints).
-#   "ipopt" (default): reliable (30/30 random plans), same optimum as the cvxpy version
-#   "highs"          : faster, but failed on 2/30 plans in testing -> experimental
-# (daqp / qpoases / proxqp / osqp did not converge reliably through CasADi's SQP wrapper.)
+# (ipopt/highs/daqp/qpoases/proxqp/osqp)
 # QP solvers are run through CasADi's sqpmethod. Select with params.qp_solver = "..."
 # or by changing DEFAULT_SOLVER.
-DEFAULT_SOLVER = "ipopt"
+DEFAULT_SOLVER = "highs"
 
 
 def _configure_solver(opti, verbose, solver=DEFAULT_SOLVER):
@@ -120,7 +118,7 @@ class ForceProblem(object):
     def setup(self):
         self.opti = ca.Opti()
         self.contacts = []  # numeric-force contacts
-        self.env = []
+        self.envs = []
         costs = []
 
         for i in range(self.horizon):
@@ -139,7 +137,7 @@ class ForceProblem(object):
                 env.append(b)
                 costs.append(b.cost)
                 wrenches.append((b.force, b.torque))
-            self.env.append(env)
+            self.envs.append(env)
             self.contacts.append(curr_contacts)
 
             total_force = sum(w[0] for w in wrenches)
@@ -153,23 +151,22 @@ class ForceProblem(object):
     def update(self, contact_plan, locations):
         self.contact_plan = contact_plan
         self.locations = locations
-        opti = self.opti
 
         for i in range(self.horizon):
             curr_mode, _ = self.contact_plan[i]
             for c, s in enumerate(curr_mode):
-                self.contacts[i][c].set_values(opti, self.locations[i][c], s, self.params)
+                self.contacts[i][c].set_values(self.opti, self.locations[i][c], s, self.params)
 
     def solve(self, verbose=False):
         sol = _solve(self.opti, self.warm, verbose, "ForceProblem", self.params.get("qp_solver", DEFAULT_SOLVER))
         self._sol = sol
-        return float(sol.value(self.opti.f)), self.opti
+        return float(sol.value(self.opti.f))
 
     def get_forces(self):
         forces = []
         for i in range(self.horizon):
             force = [np.asarray(self._sol.value(c.force)).reshape(3) for c in self.contacts[i]]
-            force += [np.asarray(self._sol.value(b.force)).reshape(3) for b in self.env[i]]
+            force += [np.asarray(self._sol.value(b.force)).reshape(3) for b in self.envs[i]]
             forces.append(force)
         return forces
 
@@ -231,7 +228,7 @@ class LocationProblem(object):
     def solve(self, verbose=False):
         sol = _solve(self.opti, self.warm, verbose, "LocationProblem", self.params.get("qp_solver", DEFAULT_SOLVER))
         self._sol = sol
-        return float(sol.value(self.opti.f)), self.opti
+        return float(sol.value(self.opti.f))
 
     def get_locations(self):
         locations = []
@@ -271,9 +268,12 @@ class BiconvexProblem(object):
 
     def update(self, contact_plan):
         self.contact_plan = contact_plan
+        # Force problem takes locations as input
         self.locations = initialize_locations(self.contact_plan, self.params)
-        self.forces = initialize_forces(self.contact_plan, self.params)
         self.fp.update(contact_plan, self.locations)
+
+        # Location problem takes forces as input
+        self.forces = initialize_forces(self.contact_plan, self.params)
         self.lp.update(contact_plan, self.forces)
         # different contact plan: last solution is not a good initial guess
         self.fp.warm.x = None
@@ -282,12 +282,15 @@ class BiconvexProblem(object):
     def solve(self, verbose=True):
         last_cost = 0
         for _ in range(self.max_it):
-            fp_cost, _ = self.fp.solve(verbose=verbose)
+            # Solve [Force problem] -> Feed [Location problem]
+            fp_cost = self.fp.solve(verbose=verbose)
             self.forces = self.fp.get_forces()
             self.lp.update(self.contact_plan, self.forces)
-            lp_cost, _ = self.lp.solve(verbose=verbose)
+
+            # Solve [Location problem] -> Feed [Force problem]
+            lp_cost = self.lp.solve(verbose=verbose)
             self.locations = self.lp.get_locations()
-            self.fp.update(self.contact_plan, self.locations)  # feed optimised locations back into the force problem
+            self.fp.update(self.contact_plan, self.locations)
             last_cost = fp_cost + lp_cost
 
         sol = DotMap()
